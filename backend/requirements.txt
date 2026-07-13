@@ -1,0 +1,9 @@
+llama-index-core
+llama-index-llms-google-genai
+llama-index-vector-stores-chroma
+llama-index-embeddings-google-genai
+llama_index.embeddings.huggingface
+chromadb
+python-dotenv
+
+# uv pip install -r .\backend\requirements.txt
