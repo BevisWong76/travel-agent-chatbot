@@ -1,9 +1,18 @@
+# Crawler
+crawl4ai
+tavily-python
+
+# LLMs & Embeddings
 llama-index-core
 llama-index-llms-google-genai
 llama-index-vector-stores-chroma
+llama-index-vector-stores-pinecone 
 llama-index-embeddings-google-genai
 llama_index.embeddings.huggingface
 chromadb
+pinecone
+pinecone-client
 python-dotenv
+
 
 # uv pip install -r .\backend\requirements.txt
