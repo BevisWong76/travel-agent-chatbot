@@ -80,4 +80,6 @@ async def search_and_crawl(query: str, max_results: int = 3) -> List[Document]:
 if __name__ == "__main__":
     test_query = "Tokyo's recommended street food and local cuisine"
     docs = asyncio.run(search_and_crawl(test_query, max_results=2))
-    print(f"\n{len(docs)} documents retrieved for query: '{test_query}")
+    print(f"\n{len(docs)} documents retrieved for query: {test_query}")
+
+# uv run python -m backend.crawler

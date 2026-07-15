@@ -1,64 +1,99 @@
 import os
-import chromadb
+from typing import List
 from dotenv import load_dotenv
 
 # LlamaIndex Imports
-from llama_index.core import VectorStoreIndex, SimpleDirectoryReader, StorageContext, Settings
-from llama_index.vector_stores.chroma import ChromaVectorStore
+from llama_index.core import VectorStoreIndex, StorageContext, Settings, Document
+from llama_index.core.node_parser import SentenceSplitter
+from llama_index.vector_stores.pinecone import PineconeVectorStore
 from llama_index.llms.google_genai import GoogleGenAI
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+from pinecone import Pinecone, ServerlessSpec
 
-# Load environment variables from .env file
 load_dotenv()
 
-# Check if GEMINI_API_KEY is set in the environment variables
-api_key = os.getenv("GEMINI_API_KEY")
-if not api_key:
+# API Keys
+gemini_api_key = os.getenv("GEMINI_API_KEY")
+pinecone_api_key = os.getenv("PINECONE_API_KEY")
+
+if not gemini_api_key:
     raise ValueError("GEMINI_API_KEY is not set.")
+if not pinecone_api_key:
+    raise ValueError("PINECONE_API_KEY is not set.")
 
-# 1. LLM uses Gemini
-Settings.llm = GoogleGenAI(model="gemini-2.5-flash", api_key=api_key)
-
-# 2. Embeddings run locally using HuggingFace BGE Small (Fast & High Accuracy)
+# --- 1. LLM & Embedding Model Settings ---
+Settings.llm = GoogleGenAI(model="gemini-2.5-flash", api_key=gemini_api_key)
 Settings.embed_model = HuggingFaceEmbedding(model_name="BAAI/bge-small-en-v1.5")
 
-# 3. Initialize ChromaDB
-PERSIST_DIR = "./backend/chroma_db"
-DATA_DIR = "./backend/data"
 
-chroma_client = chromadb.PersistentClient(path=PERSIST_DIR)
-chroma_collection = chroma_client.get_or_create_collection("travel_knowledge")
+# --- --- 2. Pinecone Index ---
+pc = Pinecone(api_key=pinecone_api_key)
+INDEX_NAME = "travel-planner"
 
-vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
-storage_context = StorageContext.from_defaults(vector_store=vector_store)
+# If the index does not exist, create it with the correct dimension and metric
+existing_indexes = [i.name for i in pc.list_indexes()]
+if INDEX_NAME not in existing_indexes:
+    print(f"[Pinecone] Creaing new index: {INDEX_NAME}...")
+    pc.create_index(
+        name=INDEX_NAME,
+        dimension=384,  # Dimension of BGE-Small
+        metric="cosine",
+        spec=ServerlessSpec(cloud="aws", region="us-east-1")
+    )
 
-def build_or_load_index():
-    if chroma_collection.count() > 0:
-        print("⚡ [RAG Engine] Direct loading existing Index from ChromaDB...")
-        index = VectorStoreIndex.from_vector_store(
-            vector_store,
-            storage_context=storage_context,
-        )
-    else:
-        print("🔄 [RAG Engine] Building new Index from backend/data...")
-        documents = SimpleDirectoryReader(DATA_DIR).load_data()
-        index = VectorStoreIndex.from_documents(
-            documents,
-            storage_context=storage_context,
-        )
-        print("✅ [RAG Engine] Index built and saved successfully!")
-        
-    return index
+pinecone_index  = pc.Index(INDEX_NAME)                                      # Pinecone Index Object
 
-index = build_or_load_index()
-query_engine = index.as_query_engine(similarity_top_k=2)
 
-def query_rag(user_query: str) -> str:
-    response = query_engine.query(user_query)
+# --- 3. LlamaIndex Vector Store & Storage Context ---
+vector_store    = PineconeVectorStore(pinecone_index=pinecone_index)        # LlamaIndex Vector Store Wrapper for Pinecone
+storage_context = StorageContext.from_defaults(vector_store=vector_store)   # Storage Container for LlamaIndex
+
+
+# --- 4. RAG Engine Functions ---
+
+# Ingest documents into the RAG system
+def ingest_documents(documents: List[Document]):
+    """ Vectorize the documents from Crawl4AI and ingest them into Pinecone for RAG retrieval. """
+    if not documents:
+        print("[RAG Engine] No documents to ingest.")
+        return
+    
+    for doc in documents:
+        print(f"Scraped Doc URL: {doc.metadata.get('source_url')} | Length: {len(doc.text)} chars")
+    
+    print(f"[RAG Engine] Ingesting {len(documents)} documents into Pinecone...")
+    VectorStoreIndex.from_documents(
+        documents,
+        storage_context=storage_context,
+        show_progress=True
+    )
+    print("[RAG Engine] Successfully ingested documents into Pinecone!")
+
+# Query the RAG system with a user question
+Settings.text_splitter = SentenceSplitter(chunk_size=512, chunk_overlap=50)
+async def query_rag(user_query: str) -> str:
+    """ Query the RAG system with a user question and return the generated answer. """
+    index = VectorStoreIndex.from_vector_store(vector_store=vector_store)
+    query_engine = index.as_query_engine(similarity_top_k=10)
+    
+    response = await query_engine.aquery(user_query)
     return str(response)
 
+
+# Local Test
 if __name__ == "__main__":
-    test_query = "What is special about the Night Paws cafe in Shibuya?"
-    print(f"\n❓ Query: {test_query}")
-    answer = query_rag(test_query)
-    print(f"\n💡 Answer:\n{answer}")
+    import asyncio
+    from backend.crawler import search_and_crawl
+
+    print(f"\n [Test Step 1] Crawling web pages...")
+    test_query = "What are the recommended street foods in Tokyo?"
+    docs = asyncio.run(search_and_crawl(test_query, max_results=3))
+    
+    print(f"\n [Test Step 2] Ingesting into Pinecone...")
+    ingest_documents(docs)
+    
+    print(f"\n [Test Step 3] RAG Engine Query...")
+    answer = asyncio.run(query_rag("Tell me 3 specific street foods in Tokyo based on the retrieved context."))
+    print(f"\n [Test Step 3 Answer]\n{answer}")
+    
+# uv run python -m backend.rag_engine

@@ -1,3 +1,6 @@
 .env
 .venv/
 .commands.txt
+
+chroma_db/
+data/
