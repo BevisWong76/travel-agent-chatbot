@@ -1,23 +1,27 @@
-# Crawler
+# Crawler & Search
 crawl4ai
 tavily-python
 
-# LLMs & Embeddings
+# LLMs, RAG & LlamaIndex
 llama-index-core
 llama-index-llms-google-genai
-llama-index-vector-stores-pinecone 
 llama-index-embeddings-google-genai
-llama_index.embeddings.huggingface
+llama-index-embeddings-huggingface
+llama-index-vector-stores-pinecone
 
 # Cloud Vector Databases
 pinecone
-pinecone-client
 
-# Utilities
-python-dotenv
+# LangChain & LangGraph (Agent Architecture)
+langchain-core
+langgraph
+
+# Web Framework & Utilities
 fastapi
 uvicorn
+python-dotenv
 nest-asyncio
+pydantic
 
 
 # uv pip install -r .\backend\requirements.txt

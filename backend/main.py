@@ -4,8 +4,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 
 # Import the custom modules for Crawler and RAG Engine
-from backend.crawler import search_and_crawl
-from backend.rag_engine import ingest_documents, query_rag
+from backend.services import search_and_crawl, ingest_documents, query_rag
 
 # FastAPI Application Setup
 app = FastAPI(

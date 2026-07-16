@@ -52,6 +52,7 @@ storage_context = StorageContext.from_defaults(vector_store=vector_store)   # St
 # --- 4. RAG Engine Functions ---
 
 # Ingest documents into the RAG system
+# Not async because VectorStoreIndex.from_documents is synchronous
 def ingest_documents(documents: List[Document]):
     """ Vectorize the documents from Crawl4AI and ingest them into Pinecone for RAG retrieval. """
     if not documents:
@@ -70,7 +71,7 @@ def ingest_documents(documents: List[Document]):
     print("[RAG Engine] Successfully ingested documents into Pinecone!")
 
 # Query the RAG system with a user question
-Settings.text_splitter = SentenceSplitter(chunk_size=512, chunk_overlap=50)
+Settings.text_splitter = SentenceSplitter(chunk_size=1024, chunk_overlap=100)
 async def query_rag(user_query: str) -> str:
     """ Query the RAG system with a user question and return the generated answer. """
     index = VectorStoreIndex.from_vector_store(vector_store=vector_store)
@@ -83,7 +84,7 @@ async def query_rag(user_query: str) -> str:
 # Local Test
 if __name__ == "__main__":
     import asyncio
-    from backend.crawler import search_and_crawl
+    from backend.services.crawler import search_and_crawl
 
     print(f"\n [Test Step 1] Crawling web pages...")
     test_query = "What are the recommended street foods in Tokyo?"
@@ -96,4 +97,4 @@ if __name__ == "__main__":
     answer = asyncio.run(query_rag("Tell me 3 specific street foods in Tokyo based on the retrieved context."))
     print(f"\n [Test Step 3 Answer]\n{answer}")
     
-# uv run python -m backend.rag_engine
+# uv run python -m backend.services.rag_engine

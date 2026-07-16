@@ -82,4 +82,4 @@ if __name__ == "__main__":
     docs = asyncio.run(search_and_crawl(test_query, max_results=2))
     print(f"\n{len(docs)} documents retrieved for query: {test_query}")
 
-# uv run python -m backend.crawler
+# uv run python -m backend.services.crawler
