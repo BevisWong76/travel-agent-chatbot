@@ -9,7 +9,7 @@ async def search_and_crawl_tool(query: str) -> str:
     docs = await search_and_crawl(query, max_results=3)
     if docs:
         await asyncio.to_thread(ingest_documents, docs)
-        return f"Successfully crawled and ingested {len(docs)} documents into Pinecone."
+        return f"Successfully crawled and ingested {len(docs)} documents into Pinecone vector store."
     return "No relevant web pages found."
 
 @tool
