@@ -13,7 +13,7 @@ class TravelAgentState(TypedDict):
     user_nationality: Optional[str]
     user_language: Optional[str]
     
-    # 3. Travel Preferences
+    # 3. Travel Details
     origin: Optional[str]
     destination: Optional[str]
     
@@ -24,14 +24,15 @@ class TravelAgentState(TypedDict):
     travelers_count: Optional[int]          
     companion_type: Optional[str]   
     
+    # 4. Preferences
     budget: Optional[str]
-    
     interests: Optional[List[str]]
     accommodation_preferences: Optional[List[str]]
     food_preferences: Optional[List[str]]
     activities_preferences: Optional[List[str]]
     
-    # 4. Human in the Loop (HITL) & Workflow Control
+    # 5. Human in the Loop (HITL) & Workflow Control
     current_step: Optional[str]             
     require_human_feedback: Optional[bool]
+    human_feedback: Optional[str]
     draft_itinerary: Optional[str]
