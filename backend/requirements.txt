@@ -17,12 +17,17 @@ langchain-core
 langchain-google-genai
 langgraph
 
+# Agent Tools
+googlemaps
+httpx
+
 # Web Framework & Utilities
 fastapi
 uvicorn
 python-dotenv
 nest-asyncio
 pydantic
+
 
 
 # uv pip install -r .\backend\requirements.txt

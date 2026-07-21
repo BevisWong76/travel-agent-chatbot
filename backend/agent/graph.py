@@ -21,12 +21,23 @@ llm = ChatGoogleGenerativeAI(
 )
 llm_with_tools = llm.bind_tools(ALL_TOOLS)
 
+# Define the system prompt for the AI model
+SYSTEM_PROMPT = """
+You are a professional and enthusiastic global travel planning expert.
+Your task is to assist users in planning itineraries, recommending attractions, local cuisine, and transportation.
+
+Rules for responding:
+1. Use a friendly, professional, and organized tone.
+2. When recommending itineraries, present daily plans using Markdown tables or bullet lists.
+3. Proactively remind users of travel considerations (e.g., seasonal weather, visa requirements, transportation tickets, etc.).
+"""
+
 
 # --- 2. Define Graph Nodes ---
 async def call_model_node(state: TravelAgentState):
     """
     LLM Core Node:
-    1. Receives the current state (including conversation history.
+    1. Receives the current state (including conversation history).
     2. Calls the LLM with the current messages and any relevant context.
     3. Returns the LLM's response, which will be appended to the history automatically by LangGraph .
     """
@@ -92,6 +103,7 @@ if __name__ == "__main__":
             "messages": [("user", test_query)],
             "destination": "Tokyo",
             "start_date": "2026-09-15",
+            "end_date": "2026-09-22",
             "require_human_feedback": False
         }
         
@@ -111,4 +123,4 @@ if __name__ == "__main__":
 
     asyncio.run(run_test())
 
-# uv run python -m backend.backend.agent.graph 
+# uv run python -m backend.agent.graph 
