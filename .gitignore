@@ -1,6 +1,6 @@
 .env
 .venv/
-.commands.txt
 
-chroma_db/
-data/
+__pycache__/
+
+.vscode/

@@ -1,5 +1,0 @@
-uv venv
-source .venv/bin/activate   # On macOS/Linux
-.venv\Scripts\activate      # on Windows
-
-uv pip install -r frontend/requirements.txt

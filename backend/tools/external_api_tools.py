@@ -205,16 +205,6 @@ async def weather_tool(location: str, date: str = "today") -> str:
     except Exception as e:
         return f"Error fetching weather data for {location}: {str(e)}"
     
-    
-# --- 3. Flight Search Tool ---
-    
-@tool
-def flights_tool(origin: str, destination: str, date: str) -> str:
-    """Searches flight options and prices between cities."""
-    # TODO: Flight API
-    # Skyscanner / Kiwi / Amadeus / Google Flights
-    return f"Lowest flight fare from {origin} to {destination} on {date} is ~$350. (Mock response)"
-
 
 if __name__ == "__main__":
     import asyncio

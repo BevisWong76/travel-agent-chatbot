@@ -2,7 +2,7 @@ import os
 from typing import Annotated, Sequence, TypedDict
 from dotenv import load_dotenv
 
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import BaseMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import StateGraph, END
 from langgraph.graph.message import add_messages
@@ -41,7 +41,7 @@ async def call_model_node(state: TravelAgentState):
     2. Calls the LLM with the current messages and any relevant context.
     3. Returns the LLM's response, which will be appended to the history automatically by LangGraph .
     """
-    messages = state["messages"]
+    messages = [SystemMessage(content=SYSTEM_PROMPT)] + state["messages"]
     response = await llm_with_tools.ainvoke(messages)
     
     return {"messages": [response]}
