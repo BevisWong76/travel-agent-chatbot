@@ -72,3 +72,7 @@ if __name__ == "__main__":
 #   "query": "What are the recommended attractions in Shibuya?",
 #   "thread_id": "session_001"
 # }
+
+
+# recursion_limit
+# Config, threads_id
