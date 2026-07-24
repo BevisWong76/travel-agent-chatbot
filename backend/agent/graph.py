@@ -3,7 +3,7 @@ import re
 from typing import Literal
 from dotenv import load_dotenv
 
-from langchain_core.messages import SystemMessage, trim_messages, BaseMessage
+from langchain_core.messages import SystemMessage, trim_messages
 from langchain_core.runnables import RunnableConfig
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import StateGraph, START, END
@@ -20,27 +20,38 @@ load_dotenv()
 # =====================================================================
 
 # Initialize the Google Gemini LLM
-llm = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash",
-    temperature=0.3,    # Low temperature for more deterministic responses
+primary_llm = ChatGoogleGenerativeAI(
+    model="gemini-3.5-flash-lite",
+    temperature=0.3,
     api_key=os.getenv("GEMINI_API_KEY")
 )
+
+fallback_llm = ChatGoogleGenerativeAI(
+    model="gemini-3.1-flash-lite",
+    temperature=0.3,
+    api_key=os.getenv("GEMINI_API_KEY")
+)
+
+llm = primary_llm.with_fallbacks([fallback_llm])
 
 # Bind the LLM with all available tools for parallel execution
 llm_with_tools = llm.bind_tools(ALL_TOOLS)
 
 SYSTEM_INSTRUCTION = """
-You are a professional, highly personalized AI Travel Agent.
-You have access to state updating tools and external retrieval tools.
+You are an elite, highly efficient AI Travel Agent. Your core objective is to resolve user requests with the ABSOLUTE MINIMUM number of API turns and tool calls (ideally completing the entire task in 1-2 turns).
 
-CRITICAL INSTRUCTIONS:
-1. STATE UPDATES: Whenever the user provides new travel details or preferences (e.g., destination, dates, budget, food preferences), you MUST call `update_travel_state_tool` with ONLY the updated key-value pairs.
-2. ITINERARY OUTPUT RULE: Whenever you generate or revise a day-by-day travel itinerary for the user, you MUST wrap the complete itinerary markdown inside <itinerary> and </itinerary> tags.
+CRITICAL OPERATIONAL RULES:
+1. PARALLEL TOOL CALLING: If a user request requires multiple actions (e.g., updating travel state AND checking weather, transit, or searching for spots), you MUST invoke ALL necessary tools simultaneously in a SINGLE turn. Do NOT call tools sequentially one by one across multiple turns.
+2. STATE UPDATES: Whenever the user provides new travel details or preferences (destination, dates, budget, food style), bundle `update_travel_state_tool` together with any retrieval tools in your very first turn.
+3. STRICT TOOL BUDGET: You have a strict limit of AT MOST 1 round of tool calls. Gather all necessary information immediately in one batch.
+4. ITINERARY OUTPUT RULE: Whenever you generate or revise a day-by-day travel itinerary for the user, you MUST wrap the complete itinerary markdown inside <itinerary> and </itinerary> tags.
    Example:
    <itinerary>
    # 3-Day Trip to Tokyo
    - Day 1: ...
-   </itinerary>"""
+   </itinerary>
+5. IMMEDIATE TERMINATION: As soon as the tool execution results are returned to you, you MUST synthesize the final response directly. Do NOT issue any further tool calls under any circumstances.
+"""
 
 # Notes:
 # We use XML tags to allow the backend to extract the itinerary from the LLM's response.
@@ -78,22 +89,27 @@ async def call_agent_node(state: TravelAgentState, config: RunnableConfig):
     prompt_messages = [full_system_prompt] + trimmed_messages
     response = await llm_with_tools.ainvoke(prompt_messages, config)
 
-    # 4. Extract & Return State Updates
+    # 4. Extract content text from the LLM response
+    content_text = ""
+    if isinstance(response.content, str):
+        content_text = response.content
+    elif isinstance(response.content, list):
+        content_text = "".join(
+            chunk.get("text", "") for chunk in response.content if isinstance(chunk, dict)
+        )
+
+    # Initialize the state update with the new message and current step
     state_update = {
         "messages": [response],
-        "current_step": "agent_reasoning",
+        "draft_itinerary": state.get("draft_itinerary")
     }
 
-    # Extract itinerary from LLM response if present
-    if isinstance(response.content, str):
-        # The LLM is asked to wrap the itinerary in <itinerary>...</itinerary> tags. 
-        # We can extract it using regex.
-        match = re.search(r"<itinerary>(.*?)</itinerary>", response.content, re.DOTALL)
+    if content_text:
+        match = re.search(r"<itinerary>(.*?)</itinerary>", content_text, re.DOTALL)
         if match:
             state_update["draft_itinerary"] = match.group(1).strip()
 
     return state_update
-
 
 # =====================================================================
 # 3. Conditional Routing

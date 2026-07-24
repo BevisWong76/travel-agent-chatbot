@@ -2,7 +2,7 @@ from typing import Any, Dict
 from langchain_core.tools import tool
 from langchain_core.messages import ToolMessage
 from langgraph.types import Command
-from langgraph.prebuilt import InjectedToolCallId
+from langchain_core.tools import InjectedToolCallId
 from typing_extensions import Annotated
 
 @tool
