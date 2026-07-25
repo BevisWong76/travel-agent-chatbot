@@ -10,8 +10,8 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.prebuilt import ToolNode
 from langgraph.checkpoint.memory import MemorySaver
 
-from backend.tools import ALL_TOOLS 
-from backend.agent.state import TravelAgentState, build_agent_context
+from tools import ALL_TOOLS 
+from agent.state import TravelAgentState, build_agent_context
 
 load_dotenv()
 

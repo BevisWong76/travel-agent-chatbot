@@ -1,7 +1,7 @@
 import asyncio
 from langchain_core.tools import tool
-from backend.services.crawler import search_and_crawl
-from backend.services.rag_engine import ingest_documents, query_rag
+from services.crawler import search_and_crawl
+from services.rag_engine import ingest_documents, query_rag
 
 @tool
 async def search_and_crawl_tool(query: str) -> str:

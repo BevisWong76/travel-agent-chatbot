@@ -3,7 +3,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 
-from backend.agent import travel_agent_app, TravelAgentState
+from agent import travel_agent_app, TravelAgentState
 
 app = FastAPI(
     title="AI Travel Planner API",
