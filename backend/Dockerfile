@@ -12,9 +12,6 @@ RUN apt-get update && apt-get upgrade -y && apt-get install -y \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Critical: Initialize Crawl4AI browser environment
-RUN crawl4ai-setup
-
 # Copy project source code
 COPY . .
 

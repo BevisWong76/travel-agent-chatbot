@@ -91,14 +91,14 @@ if __name__ == "__main__":
     from backend.services.crawler import search_and_crawl
 
     print(f"\n [Test Step 1] Crawling web pages...")
-    test_query = "What are the recommended street foods in Tokyo?"
+    test_query = "What are the recommended street foods in Hong Kong?"
     docs = asyncio.run(search_and_crawl(test_query, max_results=3))
     
     print(f"\n [Test Step 2] Ingesting into Pinecone...")
     ingest_documents(docs)
     
     print(f"\n [Test Step 3] RAG Pure Retrieval Test...")
-    context = asyncio.run(query_rag("Tell me 3 specific street foods in Tokyo based on the retrieved context."))
+    context = asyncio.run(query_rag("Tell me 3 specific street foods in Hong Kong based on the retrieved context."))
     print(f"\n [Retrieved Context for Agent]\n{context}")
     
 # uv run python backend/services/rag_engine.py

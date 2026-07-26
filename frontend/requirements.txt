@@ -1,3 +1,5 @@
 streamlit 
 google-genai 
 python-dotenv
+
+# uv pip install -r .\frontend\requirements.txt
