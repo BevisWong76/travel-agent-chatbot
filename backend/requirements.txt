@@ -5,7 +5,7 @@ tavily-python
 llama-index-core
 llama-index-llms-google-genai
 llama-index-embeddings-google-genai
-llama-index-embeddings-huggingface
+# llama-index-embeddings-huggingface
 llama-index-vector-stores-pinecone
 
 # Cloud Vector Databases

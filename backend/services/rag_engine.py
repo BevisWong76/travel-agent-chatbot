@@ -1,25 +1,34 @@
 import os
 from typing import List
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 
 # LlamaIndex Imports
 from llama_index.core import VectorStoreIndex, StorageContext, Settings, Document
 from llama_index.core.node_parser import SentenceSplitter
 from llama_index.vector_stores.pinecone import PineconeVectorStore
-from llama_index.embeddings.huggingface import HuggingFaceEmbedding
+from llama_index.embeddings.google_genai import GoogleGenAIEmbedding
+from llama_index.core.postprocessor import SimilarityPostprocessor
 from pinecone import Pinecone, ServerlessSpec
 
-load_dotenv()
+load_dotenv(find_dotenv())
 
 # API Keys
 pinecone_api_key = os.getenv("PINECONE_API_KEY")
+gemini_api_key = os.getenv("GEMINI_API_KEY")
 
 if not pinecone_api_key:
     raise ValueError("PINECONE_API_KEY is not set.")
+if not gemini_api_key:
+    print(f"DEBUG: Current Working Directory = {os.getcwd()}")
+    print(f"DEBUG: Found .env file at = {find_dotenv()}")
+    raise ValueError("GEMINI_API_KEY is not set.")
 
 # --- 1. Embedding Model Settings ---
-Settings.embed_model = HuggingFaceEmbedding(model_name="BAAI/bge-small-en-v1.5")
-Settings.text_splitter = SentenceSplitter(chunk_size=1024, chunk_overlap=100)
+Settings.embed_model = GoogleGenAIEmbedding(
+    model_name="gemini-embedding-2",
+    api_key=gemini_api_key
+)
+Settings.text_splitter = SentenceSplitter(chunk_size=512, chunk_overlap=50)
 
 # --- 2. Pinecone Index ---
 pc = Pinecone(api_key=pinecone_api_key)
@@ -30,7 +39,7 @@ if INDEX_NAME not in existing_indexes:
     print(f"[Pinecone] Creating new index: {INDEX_NAME}...")
     pc.create_index(
         name=INDEX_NAME,
-        dimension=384,  # Dimension of BGE-Small
+        dimension=3072,     # for gemini-embedding-2
         metric="cosine",
         spec=ServerlessSpec(cloud="aws", region="us-east-1")
     )
@@ -44,7 +53,7 @@ storage_context = StorageContext.from_defaults(vector_store=vector_store)
 
 # --- 4. RAG Engine Functions ---
 def ingest_documents(documents: List[Document]):
-    """ Vectorize the documents from Crawl4AI and ingest them into Pinecone for RAG retrieval. """
+    """ Vectorize the documents via Gemini API and ingest them into Pinecone for RAG retrieval. """
     if not documents:
         print("[RAG Engine] No documents to ingest.")
         return
@@ -64,11 +73,15 @@ def ingest_documents(documents: List[Document]):
 
 
 async def query_rag(user_query: str) -> str:
-    """ Search Pinecone for relevant documents and return concatenated context chunks (No LLM Call). """
+    """ Search Pinecone for relevant documents and return concatenated context chunks. """
     index = VectorStoreIndex.from_vector_store(vector_store=vector_store)
+    processor = SimilarityPostprocessor(similarity_cutoff=0.7)
     
     # 1. Create Retriever
-    retriever = index.as_retriever(similarity_top_k=5)
+    retriever = index.as_retriever(
+        similarity_top_k=5,
+        node_postprocessors=[processor]
+    )
     
     # 2. Retrieve relevant nodes from Pinecone
     nodes = await retriever.aretrieve(user_query)
@@ -76,7 +89,7 @@ async def query_rag(user_query: str) -> str:
     if not nodes:
         return "No relevant internal guides found in database."
     
-    # 3. Return concatenated context for the agent to use in its reasoning
+    # 3. Return concatenated context
     context_list = []
     for i, node in enumerate(nodes, 1):
         source = node.metadata.get("source_url", "Unknown")
@@ -88,11 +101,11 @@ async def query_rag(user_query: str) -> str:
 # Local Test
 if __name__ == "__main__":
     import asyncio
-    from backend.services.crawler import search_and_crawl
+    from .crawler import search_and_crawl
 
     print(f"\n [Test Step 1] Crawling web pages...")
     test_query = "What are the recommended street foods in Hong Kong?"
-    docs = asyncio.run(search_and_crawl(test_query, max_results=3))
+    docs = asyncio.run(search_and_crawl(test_query, max_results=2))
     
     print(f"\n [Test Step 2] Ingesting into Pinecone...")
     ingest_documents(docs)

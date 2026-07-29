@@ -10,47 +10,44 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.prebuilt import ToolNode
 from langgraph.checkpoint.memory import MemorySaver
 
-from tools import ALL_TOOLS 
+from tools import ACTION_TOOLS
 from agent.state import TravelAgentState, build_agent_context
+from services.rag_engine import query_rag
+from services.crawler import search_and_crawl
 
 load_dotenv()
 
 # =====================================================================
-# 1. Initialize LLM, Tools, and System Instructions
+# 1. LLM & Tools Setup
 # =====================================================================
-
-# Initialize the Google Gemini LLM
 primary_llm = ChatGoogleGenerativeAI(
     model="gemini-3.5-flash-lite",
     temperature=0.3,
     api_key=os.getenv("GEMINI_API_KEY")
 )
-
 fallback_llm = ChatGoogleGenerativeAI(
     model="gemini-3.1-flash-lite",
     temperature=0.3,
     api_key=os.getenv("GEMINI_API_KEY")
 )
-
 llm = primary_llm.with_fallbacks([fallback_llm])
 
 # Bind the LLM with all available tools for parallel execution
-llm_with_tools = llm.bind_tools(ALL_TOOLS)
+llm_with_tools = llm.bind_tools(ACTION_TOOLS)
 
 SYSTEM_INSTRUCTION = """
-You are an elite, highly efficient AI Travel Agent. Your core objective is to resolve user requests with the ABSOLUTE MINIMUM number of API turns and tool calls (ideally completing the entire task in 1-2 turns).
+You are an elite, highly efficient AI Travel Agent.
 
 CRITICAL OPERATIONAL RULES:
-1. PARALLEL TOOL CALLING: If a user request requires multiple actions (e.g., updating travel state AND checking weather, transit, or searching for spots), you MUST invoke ALL necessary tools simultaneously in a SINGLE turn. Do NOT call tools sequentially one by one across multiple turns.
-2. STATE UPDATES: Whenever the user provides new travel details or preferences (destination, dates, budget, food style), bundle `update_travel_state_tool` together with any retrieval tools in your very first turn.
-3. STRICT TOOL BUDGET: You have a strict limit of AT MOST 1 round of tool calls. Gather all necessary information immediately in one batch.
-4. ITINERARY OUTPUT RULE: Whenever you generate or revise a day-by-day travel itinerary for the user, you MUST wrap the complete itinerary markdown inside <itinerary> and </itinerary> tags.
+1. Ground your answers using the provided [Retrieved Context] and state details.
+2. PARALLEL TOOL CALLING: If you need live action data (e.g., weather forecast, map routes, updating state), call all necessary tools in a single turn.
+3. STATE UPDATES: Whenever the user provides new travel details or preferences (destination, dates, budget, food style), use `update_travel_state_tool` to update the state immediately.
+4. ITINERARY OUTPUT RULE: Whenever you generate an itinerary, wrap it inside <itinerary> and </itinerary> tags.
    Example:
    <itinerary>
    # 3-Day Trip to Tokyo
    - Day 1: ...
    </itinerary>
-5. IMMEDIATE TERMINATION: As soon as the tool execution results are returned to you, you MUST synthesize the final response directly. Do NOT issue any further tool calls under any circumstances.
 """
 
 # Notes:
@@ -60,21 +57,41 @@ CRITICAL OPERATIONAL RULES:
 # JSON Mode is better for API-to-API communication, while XML tag extraction is better for human-facing chat interfaces.
 
 # =====================================================================
-# 2. Node Function for Agent Reasoning
+# 2. Nodes Definition
 # =====================================================================
-async def call_agent_node(state: TravelAgentState, config: RunnableConfig):
-    """
-        Agent Reasoning Node:
-    1. Builds a structured context from the current TravelAgentState and the system instruction.
-    2. Trims the conversation history to fit within the LLM's context window.
-    3. Invokes the LLM with the context and conversation history.
-    4. Extracts the LLM's response and updates the TravelAgentState accordingly.
-    """
-    # 1. Prepare the system prompt with the current state context
-    context_str = build_agent_context(state)
-    full_system_prompt = SystemMessage(content=f"{SYSTEM_INSTRUCTION}\n\n{context_str}")
 
-    # 2. Context Windowing
+# Node 1: Code-level CRAG (Process Knowledge Base / Crawler)
+async def retrieve_or_crawl_node(state: TravelAgentState):
+    messages = state.get("messages", [])
+    user_query = messages[-1].content if messages else ""
+    
+    # 1. Check Pinecone for relevant context
+    rag_context = await query_rag(user_query)
+    
+    # 2. If Pinecone returns relevant context, use it
+    if rag_context and "No relevant internal guides" not in rag_context:
+        print("[CRAG] Pinecone Hit!")
+        return {"retrieved_context": rag_context}
+    
+    # 3. If Pinecone returns no relevant context, trigger the web crawler
+    print("[CRAG] Pinecone Miss -> Triggering Crawler...")
+    crawled_docs = await search_and_crawl(user_query, max_results=2)
+    crawl_context = "\n\n".join([f"Source: {doc.url}\nContent: {doc.text}" for doc in crawled_docs])
+    
+    return {"retrieved_context": crawl_context}
+
+
+# Node 2: Agent Reasoning Node (Process Tools Calls and Generate Final Response)
+async def call_agent_node(state: TravelAgentState, config: RunnableConfig):
+    context_str = build_agent_context(state)
+    retrieved_info = state.get("retrieved_context", "No retrieved docs.")
+    
+    # Prepare the system prompt with the current state context and retrieved info
+    full_system_prompt = SystemMessage(
+        content=f"{SYSTEM_INSTRUCTION}\n\n[Retrieved Context]\n{retrieved_info}\n\n[State Context]\n{context_str}"
+    )
+
+    # Context Windowing: Trim messages to fit within LLM's context window
     messages = state.get("messages", [])
     trimmed_messages = trim_messages(
         messages,
@@ -85,25 +102,18 @@ async def call_agent_node(state: TravelAgentState, config: RunnableConfig):
         include_system=False,
     )
 
-    # 3. Invoke LLM
     prompt_messages = [full_system_prompt] + trimmed_messages
+    
+    # Invoke the LLM with tools
     response = await llm_with_tools.ainvoke(prompt_messages, config)
 
-    # 4. Extract content text from the LLM response
-    content_text = ""
-    if isinstance(response.content, str):
-        content_text = response.content
-    elif isinstance(response.content, list):
-        content_text = "".join(
-            chunk.get("text", "") for chunk in response.content if isinstance(chunk, dict)
-        )
-
-    # Initialize the state update with the new message and current step
     state_update = {
         "messages": [response],
         "draft_itinerary": state.get("draft_itinerary")
     }
 
+    # Extract Itinerary XML Tag
+    content_text = response.content if isinstance(response.content, str) else ""
     if content_text:
         match = re.search(r"<itinerary>(.*?)</itinerary>", content_text, re.DOTALL)
         if match:
@@ -111,40 +121,37 @@ async def call_agent_node(state: TravelAgentState, config: RunnableConfig):
 
     return state_update
 
+
 # =====================================================================
-# 3. Conditional Routing
+# 3. Conditional Routing Function
 # =====================================================================
 def should_continue(state: TravelAgentState) -> Literal["tools", "__end__"]:
-    """
-        Conditional Routing Function:
-    Checks the current state to determine if the agent should invoke tools or end the conversation.
-    - If the last message contains tool calls, it routes to the "tools" node.
-    - If there are no messages or no tool calls, it ends the conversation. 
-    """
     messages = state.get("messages", [])
     if not messages:
         return END
 
     last_message = messages[-1]
+    # if the last message contains tool calls, route to "tools" node; otherwise, end the conversation
     if hasattr(last_message, "tool_calls") and last_message.tool_calls:
         return "tools"
     
     return END
 
-
 # =====================================================================
-# 4. StateGraph workflow Definition
+# 4. StateGraph Assembly
 # =====================================================================
-
-# Initialize the StateGraph with the TravelAgentState schema
 builder = StateGraph(TravelAgentState)
 
 # Add Nodes
+builder.add_node("retrieve_or_crawl", retrieve_or_crawl_node)
 builder.add_node("agent", call_agent_node)
-builder.add_node("tools", ToolNode(ALL_TOOLS))  # ToolNode supports parallel execution of multiple tools
+builder.add_node("tools", ToolNode(ACTION_TOOLS)) 
 
-# Set Edges
-builder.add_edge(START, "agent")    # Start the workflow with the Agent Node
+# Add Edges
+builder.add_edge(START, "retrieve_or_crawl")      # 1. Always start with CRAG to retrieve context or crawl
+builder.add_edge("retrieve_or_crawl", "agent")    # 2. Pass the context to the Agent for reasoning and tool invocation
+
+# 3. Conditional Routing: If the Agent calls tools, route to "tools" node; otherwise, end the conversation
 builder.add_conditional_edges(
     "agent",
     should_continue,
@@ -153,17 +160,13 @@ builder.add_conditional_edges(
         END: END,
     },
 )
-builder.add_edge("tools", "agent")  # After tool execution, results are returned to the Agent for further reasoning
+builder.add_edge("tools", "agent")                 # 4. Tool results are passed back to the Agent for final response generation
 
 # =====================================================================
 # 5. Checkpointer (MemorySaver / Postgres) & Compile Graph
 # =====================================================================
+
 # Checkpointer: In-memory for development; 
 # can switch to AsyncPostgresSaver or RedisSaver for production
 checkpointer = MemorySaver()
-
-
-# Compile the Graph with the checkpointer for state persistence
 travel_agent_app = builder.compile(checkpointer=checkpointer)
-
-
