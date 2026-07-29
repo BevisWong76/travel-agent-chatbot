@@ -1,10 +1,12 @@
 import os
+from datetime import datetime
 from typing import List
 from dotenv import load_dotenv, find_dotenv
 
 # LlamaIndex Imports
 from llama_index.core import VectorStoreIndex, StorageContext, Settings, Document
 from llama_index.core.node_parser import SentenceSplitter
+from llama_index.core.vector_stores import MetadataFilters, ExactMatchFilter
 from llama_index.vector_stores.pinecone import PineconeVectorStore
 from llama_index.embeddings.google_genai import GoogleGenAIEmbedding
 from llama_index.core.postprocessor import SimilarityPostprocessor
@@ -58,9 +60,15 @@ def ingest_documents(documents: List[Document]):
         print("[RAG Engine] No documents to ingest.")
         return
     
+    current_year = datetime.now().year
+    
     for doc in documents:
         url = doc.metadata.get("source_url", "")
         doc.id_ = url if url else doc.id_
+        
+        if "valid_year" not in doc.metadata:
+            doc.metadata["valid_year"] = current_year
+        
         print(f"Scraped Doc URL: {doc.metadata.get('source_url')} | Length: {len(doc.text)} chars")
     
     print(f"[RAG Engine] Ingesting {len(documents)} documents into Pinecone...")
@@ -72,24 +80,31 @@ def ingest_documents(documents: List[Document]):
     print("[RAG Engine] Successfully ingested documents into Pinecone!")
 
 
-async def query_rag(user_query: str) -> str:
+async def query_rag(user_query: str, min_year: int = datetime.now().year) -> str:
     """ Search Pinecone for relevant documents and return concatenated context chunks. """
     index = VectorStoreIndex.from_vector_store(vector_store=vector_store)
+    
+    
+    # 1. Filter nodes by valid_year and apply similarity postprocessor
+    filters = MetadataFilters(
+        filters=[ExactMatchFilter(key="valid_year", value=min_year)]
+    )
     processor = SimilarityPostprocessor(similarity_cutoff=0.7)
     
-    # 1. Create Retriever
+    # 2. Create Retriever
     retriever = index.as_retriever(
         similarity_top_k=5,
-        node_postprocessors=[processor]
+        node_postprocessors=[processor],
+        filters=filters
     )
     
-    # 2. Retrieve relevant nodes from Pinecone
+    # 3. Retrieve relevant nodes from Pinecone
     nodes = await retriever.aretrieve(user_query)
     
     if not nodes:
         return "No relevant internal guides found in database."
     
-    # 3. Return concatenated context
+    # 4. Return concatenated context
     context_list = []
     for i, node in enumerate(nodes, 1):
         source = node.metadata.get("source_url", "Unknown")

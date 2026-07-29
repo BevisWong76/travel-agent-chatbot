@@ -16,3 +16,7 @@ async def search_and_crawl_tool(query: str) -> str:
 async def rag_retrieval_tool(query: str) -> str:
     """Useful for searching travel knowledge, recommendations, and context stored in Pinecone."""
     return await query_rag(query)
+
+# Notes:
+# We have implimented a CRAG in the graph
+# Hence this tools are not being used in the graph.

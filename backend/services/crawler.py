@@ -1,49 +1,55 @@
 import os
 import re
+from datetime import datetime
 from typing import List
 from dotenv import load_dotenv
 from tavily import AsyncTavilyClient
 from llama_index.core import Document
 
+# Load environment variables from .env file
 load_dotenv()
 
-# Clean Markdown Noise
+# Regular expressions for cleaning up text
+RE_PURE_LINKS = re.compile(r'^\s*(?:[*+-]\s*)?(?:\[.*?\]\(https?://.*?\)\s*)+$', re.MULTILINE)
+RE_EMPTY_LINKS = re.compile(r'\[\s*\]\(https?://.*?\)')
+RE_MULTI_NEWLINES = re.compile(r'\n\s*\n')
+
+# Tavily API Client Singleton
+_tavily_client = None
+
+def get_tavily_client() -> AsyncTavilyClient:
+    global _tavily_client
+    if _tavily_client is None:
+        api_key = os.getenv("TAVILY_API_KEY")
+        if not api_key:
+            raise ValueError("TAVILY_API_KEY is not set in the .env file.")
+        _tavily_client = AsyncTavilyClient(api_key=api_key)
+    return _tavily_client
+
 def clean_markdown_noise(text: str) -> str:
     """Remove noise from the raw text, such as pure links and excessive blank lines."""
     if not text:
         return ""
-    
-    # Remove pure link lists
-    text = re.sub(r'^\s*(?:[*+-]\s*)?(?:\[.*?\]\(https?://.*?\)\s*)+$', '', text, flags=re.MULTILINE)
-    
-    # Remove inline empty links
-    text = re.sub(r'\[\s*\]\(https?://.*?\)', '', text)
-    
-    # Remove excessive blank lines
-    text = re.sub(r'\n\s*\n', '\n\n', text)
-    
+    text = RE_PURE_LINKS.sub('', text)
+    text = RE_EMPTY_LINKS.sub('', text)
+    text = RE_MULTI_NEWLINES.sub('\n\n', text)
     return text.strip()
-
 
 async def search_and_crawl(query: str, max_results: int = 3) -> List[Document]:
     """
     Fetch search results and full webpage contents directly via Tavily API.
     Replaces Crawl4AI/Chromium to save memory on Render Free Tier.
     """
-    tavily_api_key = os.getenv("TAVILY_API_KEY")
-    if not tavily_api_key:
-        raise ValueError("TAVILY_API_KEY is not set in the .env file.")
-
-    tavily_client = AsyncTavilyClient(api_key=tavily_api_key)
+    client = get_tavily_client()
     
     print(f"[Search Engine] Searching & Extracting content for: '{query}'...")
     
-    # Use Tavily's search API to get results and their raw content
-    search_response = await tavily_client.search(
+    # Advanced search with raw content fetching
+    search_response = await client.search(
         query=query, 
         max_results=max_results,
-        search_depth="advanced",       # Advanced search depth for better results
-        include_raw_content=True       # Fetch full webpage content directly
+        search_depth="advanced",
+        include_raw_content=False  # Set to True if you want raw HTML content, but may increase payload size
     )
     
     results = search_response.get('results', [])
@@ -53,7 +59,6 @@ async def search_and_crawl(query: str, max_results: int = 3) -> List[Document]:
 
     documents = []
     for result in results:
-        # Prefer 'raw_content' if available, else fallback to 'content'
         raw_text = result.get('raw_content') or result.get('content') or ""
         clean_text = clean_markdown_noise(raw_text)
         
@@ -63,7 +68,8 @@ async def search_and_crawl(query: str, max_results: int = 3) -> List[Document]:
                 metadata={
                     "source_url": result.get('url', ''),
                     "title": result.get('title', ''),
-                    "query": query
+                    "query": query,
+                    "valid_year": datetime.now().year
                 }
             )
             documents.append(doc)

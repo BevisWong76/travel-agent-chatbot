@@ -2,6 +2,11 @@ from typing import Annotated, TypedDict, List, Optional, Any
 from langchain_core.messages import BaseMessage
 from langgraph.graph.message import add_messages
 
+def keep_last_non_null(existing_val: Optional[str], new_val: Optional[str]) -> Optional[str]:
+    if new_val is not None:
+        return new_val
+    return existing_val
+
 class TravelAgentState(TypedDict):
     # 1. Conversation History (Memory)
     messages: Annotated[List[BaseMessage], add_messages]
@@ -31,7 +36,7 @@ class TravelAgentState(TypedDict):
     activities_preferences: Optional[List[str]]
     
     # 5. Draft Itinerary
-    draft_itinerary: Optional[str]
+    draft_itinerary: Annotated[Optional[str], keep_last_non_null]
     
     # 6. Human in the Loop (HITL) & Workflow Control
     # current_step: Optional[str]             

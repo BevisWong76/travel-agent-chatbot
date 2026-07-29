@@ -1,13 +1,18 @@
 import os
-from datetime import datetime
+from datetime import datetime, date, timedelta
+from typing import Optional
 import httpx
 import googlemaps
 from dotenv import load_dotenv
 from langchain_core.tools import tool
+from async_lru import alru_cache
+from langchain_core.tools import tool
 
 load_dotenv()
 
-# --- 1. Google Maps Directions Tool ---
+# =====================================================================
+# 1. Google Maps Directions Tool
+# =====================================================================
 
 # Initialize Google Maps Client
 API_KEY = os.getenv("GOOGLE_MAPS_API_KEY")
@@ -119,92 +124,148 @@ async def maps_tool(origin: str, destination: str, mode: str = "transit", depart
         return f"STATUS: API_ERROR\nFailed to fetch directions: {str(e)}"
 
 
-# --- 2. Weather Forecast Tool ---
+# =====================================================================
+# 2. Weather Forecast Tool
+# =====================================================================
+
+# Default shared HTTPX client for async requests with connection pooling
+shared_httpx_client = httpx.AsyncClient(
+    timeout=5.0,
+    limits=httpx.Limits(max_keepalive_connections=20, max_connections=100)
+)
+
+# WMO Weather Code Mapping
+WEATHER_CODE_MAP = {
+    0: "Clear sky ☀️",
+    1: "Mainly clear 🌤️", 2: "Partly cloudy ⛅", 3: "Overcast ☁️",
+    45: "Foggy 🌫️", 48: "Depositing rime fog 🌫️",
+    51: "Light drizzle 🌧️", 61: "Slight rain 🌧️", 63: "Moderate rain 🌧️", 65: "Heavy rain 🌧️",
+    80: "Slight rain showers 🌦️", 95: "Thunderstorm 🌩️"
+}
+
+# Cache ONLY the geocoding coordinates (Location -> Lat/Lon never changes)
+# This achieves a 100% Cache Hit Rate for repeated cities with zero memory side-effects.
+@alru_cache(maxsize=500)
+async def _get_coordinates(location_clean: str):
+    geo_url = f"https://geocoding-api.open-meteo.com/v1/search?name={location_clean}&count=1&language=en&format=json"
+    geo_res = await shared_httpx_client.get(geo_url)
+    geo_data = geo_res.json()
+
+    if not geo_data.get("results"):
+        return None
+
+    result = geo_data["results"][0]
+    return {
+        "lat": result["latitude"],
+        "lon": result["longitude"],
+        "city_name": result.get("name", location_clean),
+        "country": result.get("country", "")
+    }
+
+async def _fetch_weather_data(location: str, start_date: Optional[str] = None, end_date: Optional[str] = None ) -> str:
+    location_clean = location.strip().lower()
+    
+    # 1. Get coordinates
+    geo_info = await _get_coordinates(location_clean)
+    if not geo_info:
+        return f"Location '{location}' could not be found. Please ask the user to clarify or provide a nearby major city."
+
+    lat, lon = geo_info["lat"], geo_info["lon"]
+    city_name, country = geo_info["city_name"], geo_info["country"]
+
+    # 2. Parse start_date and end_date, defaulting to 3 days forcast if not provided
+    today = date.today()
+    s_date = datetime.strptime(start_date, "%Y-%m-%d").date() if start_date else today
+    e_date = datetime.strptime(end_date, "%Y-%m-%d").date() if end_date else s_date + timedelta(days=2)
+    
+    # Use the Open-Meteo API to fetch weather data based on the date range
+    days_from_today = (s_date - today).days
+    if -365 <= days_from_today < 0:
+        # A: Past date within the last year -> Call Archive API for historical data
+        weather_url = (
+            f"https://archive-api.open-meteo.com/v1/archive?"
+            f"latitude={lat}&longitude={lon}&"
+            f"start_date={s_date}&end_date={e_date}&"
+            f"daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum&"
+            f"timezone=auto"
+        )
+        data_type = "Historical Data"
+        
+    elif 0 <= days_from_today <= 14:
+        # B: Future date within 14 days -> Call Forecast API (accurate forecast)
+        weather_url = (
+            f"https://api.open-meteo.com/v1/forecast?"
+            f"latitude={lat}&longitude={lon}&"
+            f"start_date={s_date}&end_date={e_date}&"
+            f"daily=weather_code,temperature_2m_max,temperature_2m_min,apparent_temperature_max,apparent_temperature_min,precipitation_probability_max,uv_index_max&"
+            f"timezone=auto"
+        )
+        data_type = "Live Forecast"
+        
+    else:
+        # C: Future date beyond 14 days (e.g., half a year later) -> Automatically fetch "same period last year's historical data" for climate reference
+        last_year_s_date = s_date.replace(year=s_date.year - 1)
+        last_year_e_date = e_date.replace(year=e_date.year - 1)
+        
+        weather_url = (
+            f"https://archive-api.open-meteo.com/v1/archive?"
+            f"latitude={lat}&longitude={lon}&"
+            f"start_date={last_year_s_date}&end_date={last_year_e_date}&"
+            f"daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum&"
+            f"timezone=auto"
+        )
+        data_type = f"Historical Climate Estimate (based on same period last year: {last_year_s_date} to {last_year_e_date})"
+
+    # 4. Fetch weather data from the appropriate API endpoint
+    weather_res = await shared_httpx_client.get(weather_url, timeout=5.0)
+    weather_data = weather_res.json()
+    daily = weather_data.get("daily", {})
+
+    times = daily.get("time", [])
+    if not times:
+        return f"No weather data available for {city_name} for the requested dates ({s_date} to {e_date})."
+
+    # 5. Parse and format the results
+    forecast_summary = []
+    max_temps = daily.get("temperature_2m_max", [])
+    min_temps = daily.get("temperature_2m_min", [])
+    precip_list = daily.get("precipitation_probability_max") or daily.get("precipitation_sum") or []
+    uv_list = daily.get("uv_index_max", [])
+    codes = daily.get("weather_code", [])
+
+    for i in range(len(times)):
+        d_time = times[i]
+        max_t = max_temps[i] if i < len(max_temps) else "N/A"
+        min_t = min_temps[i] if i < len(min_temps) else "N/A"
+        precip = precip_list[i] if i < len(precip_list) else "N/A"
+        uv_max = uv_list[i] if i < len(uv_list) else "N/A"
+        code = codes[i] if i < len(codes) else 0
+        cond = WEATHER_CODE_MAP.get(code, "Clear/Cloudy")
+
+        forecast_summary.append(
+            f"• {d_time}: {cond}, {min_t}°C - {max_t}°C | Rain/Precip: {precip}% | UV: {uv_max}"
+        )
+
+    return (
+        f"Weather report for {city_name}, {country} [{data_type}]:\n"
+        + "\n".join(forecast_summary)
+    )
+
+
 @tool
-async def weather_tool(location: str, date: str = "today") -> str:
-    """
-    Gets the weather forecast for a given location (city or neighborhood) and travel date.
+async def weather_tool(location: str, start_date: Optional[str] = None, end_date: Optional[str] = None) -> str:
+    """Gets the weather forecast or historical weather for a given location and optional date range.
     
     Args:
-        location: City or district name (e.g., 'Tokyo', 'Shibuya', 'Osaka', 'Paris').
-        date: Target date or description (e.g., 'today', 'next week', '2026-04-01').
+        location: City or district name (e.g., 'Tokyo', 'Paris').
+        start_date: Optional start date in 'YYYY-MM-DD' format (e.g., '2026-10-15').
+        end_date: Optional end date in 'YYYY-MM-DD' format (e.g., '2026-10-18').
     """
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            # Step 1: Geocoding - Get latitude and longitude for the location
-            geo_url = f"https://geocoding-api.open-meteo.com/v1/search?name={location}&count=1&language=en&format=json"
-            geo_res = await client.get(geo_url)
-            geo_data = geo_res.json()
-
-            if not geo_data.get("results"):
-                return (
-                    f"Location '{location}' could not be found. "
-                    "Please ask the user to clarify or provide a nearby major city."
-                )
-
-            result = geo_data["results"][0]
-            lat = result["latitude"]
-            lon = result["longitude"]
-            city_name = result.get("name", location)
-            country = result.get("country", "")
-
-            # Step 2: Fetch Weather Data
-            weather_url = (
-                f"https://api.open-meteo.com/v1/forecast?"
-                f"latitude={lat}&longitude={lon}&"
-                f"current=temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m&"
-                f"daily=weather_code,temperature_2m_max,temperature_2m_min,apparent_temperature_max,apparent_temperature_min,precipitation_probability_max,uv_index_max&"
-                f"timezone=auto"
-            )
-            weather_res = await client.get(weather_url)
-            weather_data = weather_res.json()
-
-            current = weather_data.get("current", {})
-            daily = weather_data.get("daily", {})
-
-            # Step 3: WMO Weather Code Mapping
-            weather_code_map = {
-                0: "Clear sky ☀️",
-                1: "Mainly clear 🌤️", 2: "Partly cloudy ⛅", 3: "Overcast ☁️",
-                45: "Foggy 🌫️", 48: "Depositing rime fog 🌫️",
-                51: "Light drizzle 🌧️", 61: "Slight rain 🌧️", 63: "Moderate rain 🌧️", 65: "Heavy rain 🌧️",
-                80: "Slight rain showers 🌦️", 95: "Thunderstorm 🌩️"
-            }
-
-            curr_temp = current.get("temperature_2m", "N/A")
-            curr_apparent_temp = current.get("apparent_temperature", "N/A")
-            curr_code = current.get("weather_code", 0)
-            curr_condition = weather_code_map.get(curr_code, "Varied conditions")
-
-            # Step 4: Prepare 3 days Forecast Summary
-            forecast_summary = []
-            if daily and "time" in daily:
-                for i in range(min(3, len(daily["time"]))):
-                    d_time = daily["time"][i]
-                    max_t = daily["temperature_2m_max"][i]
-                    min_t = daily["temperature_2m_min"][i]
-                    feels_max = daily["apparent_temperature_max"][i]
-                    feels_min = daily["apparent_temperature_min"][i]
-                    precip = daily["precipitation_probability_max"][i]
-                    uv_max = daily["uv_index_max"][i] if "uv_index_max" in daily else "N/A"
-                    code = daily["weather_code"][i]
-                    cond = weather_code_map.get(code, "Clear/Cloudy")
-
-                    forecast_summary.append(
-                        f"• {d_time}: {cond}, {min_t}°C - {max_t}°C (Feels like: {feels_min}°C - {feels_max}°C) | Rain prob: {precip}% | UV: {uv_max}"
-                    )
-
-            forecast_text = "\n".join(forecast_summary)
-
-            return (
-                f"Weather report for {city_name}, {country}:\n"
-                f"Current Temp: {curr_temp}°C, Apparent Temp: {curr_apparent_temp}°C, Condition: {curr_condition}\n"
-                f"Upcoming Forecast:\n{forecast_text}"
-            )
-
+        return await _fetch_weather_data(location, start_date, end_date)
     except Exception as e:
         return f"Error fetching weather data for {location}: {str(e)}"
-    
+
 
 if __name__ == "__main__":
     import asyncio

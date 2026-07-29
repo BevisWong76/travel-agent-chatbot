@@ -76,7 +76,7 @@ async def retrieve_or_crawl_node(state: TravelAgentState):
     # 3. If Pinecone returns no relevant context, trigger the web crawler
     print("[CRAG] Pinecone Miss -> Triggering Crawler...")
     crawled_docs = await search_and_crawl(user_query, max_results=2)
-    crawl_context = "\n\n".join([f"Source: {doc.url}\nContent: {doc.text}" for doc in crawled_docs])
+    crawl_context = "\n\n".join([f"Source: {doc.metadata.get('source_url', 'Unknown')}\nContent: {doc.text.strip()}" for doc in crawled_docs])
     
     return {"retrieved_context": crawl_context}
 
@@ -101,26 +101,31 @@ async def call_agent_node(state: TravelAgentState, config: RunnableConfig):
         start_on="human",
         include_system=False,
     )
-
     prompt_messages = [full_system_prompt] + trimmed_messages
     
     # Invoke the LLM with tools
     response = await llm_with_tools.ainvoke(prompt_messages, config)
 
-    state_update = {
-        "messages": [response],
-        "draft_itinerary": state.get("draft_itinerary")
-    }
+    # Extract the content text from the response, handling both string and list formats
+    content_text = ""
+    if isinstance(response.content, str):
+        content_text = response.content
+    elif isinstance(response.content, list):
+        content_text = "".join(
+            [chunk.get("text", "") for chunk in response.content if isinstance(chunk, dict)]
+        )
 
-    # Extract Itinerary XML Tag
-    content_text = response.content if isinstance(response.content, str) else ""
+    # Extract Itinerary by locating XML Tag
+    new_itinerary = None
     if content_text:
         match = re.search(r"<itinerary>(.*?)</itinerary>", content_text, re.DOTALL)
         if match:
-            state_update["draft_itinerary"] = match.group(1).strip()
+            new_itinerary = match.group(1).strip()
 
-    return state_update
-
+    return {
+        "messages": [response],
+        "draft_itinerary": new_itinerary
+    }
 
 # =====================================================================
 # 3. Conditional Routing Function
