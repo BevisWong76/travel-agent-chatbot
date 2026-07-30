@@ -1,8 +1,10 @@
 import os
+import json
 import uvicorn
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import Optional
+from fastapi.responses import StreamingResponse
 
 from agent import travel_agent_app, TravelAgentState
 
@@ -28,56 +30,89 @@ def health_check():
     return {"status": "healthy", "service": "AI Travel Planner Backend"}
 
 
-@app.post("/chat", response_model=QueryResponse)
+@app.post("/chat")
 async def chat_endpoint(request: QueryRequest):
     """
-    Core Chat Endpoint:
-    Processes user queries, invokes the LangGraph agent workflow, and returns the final response.
+    Streaming Chat Endpoint via Server-Sent Events (SSE).
+    Streams LLM tokens live and sends final state metadata (like draft_itinerary).
     """
     try:
         print(f"[FastAPI] Received query: '{request.query}' for thread_id: '{request.thread_id}'")
         
-        # 1. Create initial_state
-        initial_state: TravelAgentState = {
-            "messages": [("user", request.query)]
-        }
-        
-        # 2. Create LangGraph execution Config
-        # Added recursion_limit to prevent infinite tool-calling loops
+        # 1. Create initial_state & Config
+        initial_state: TravelAgentState = {"messages": [("user", request.query)]}
         config = {
-            "configurable": {
-                "thread_id": request.thread_id  # Allows for session-based state management across multiple queries
-            },
-            "recursion_limit": 10  # allows up to 10 recursive tool calls to prevent infinite loops
+            "configurable": {"thread_id": request.thread_id},
+            "recursion_limit": 10
         }
-        
-        # 3. Asynchronously invoke Agent Graph computation
-        final_state = await travel_agent_app.ainvoke(initial_state, config=config)
-        
-        # 4. Extract LLM final output (last Message)
-        last_message = final_state["messages"][-1]
-        
-        # Handle cases where content is structured list of text chunks
-        answer_text = last_message.content
-        if isinstance(answer_text, list):
-            answer_text = "".join([chunk.get("text", "") for chunk in answer_text if isinstance(chunk, dict)])
 
-        return QueryResponse(
-            query=request.query,
-            answer=answer_text,
-            draft_itinerary=final_state.get("draft_itinerary")
-        )
+        # 2. Define a Server-Sent Events (SSE) generator
+        async def event_generator():
+            try:
+                print("[FastAPI] Starting SSE event stream...")
+
+                async for event in travel_agent_app.astream_events(initial_state, version="v2", config=config):
+                    kind = event["event"]
+                    node_name = event.get("metadata", {}).get("langgraph_node", "")
+                    
+                    # Event: on_chain_start for the "retrieve_or_crawl" node
+                    if kind == "on_chain_start" and node_name == "retrieve_or_crawl":
+                        yield f"data: {json.dumps({'type': 'status', 'message': 'Checking knowledge base & searching web...'})}\n\n"
+
+                    # Event: on_tool_start for any tool invocation
+                    elif kind == "on_tool_start":
+                        tool_name = event.get("name", "tool")
+                        yield f"data: {json.dumps({'type': 'status', 'message': f'Calling tool: {tool_name}...'})}\n\n"
+                            
+                    # Event: on_chat_model_stream for streaming LLM output
+                    elif kind == "on_chat_model_stream":
+                        # Only stream content from the "agent" node to the frontend
+                        if node_name == "agent":
+                            chunk = event["data"]["chunk"]
+                            content_text = ""
+                            
+                            # Support both string and list formats for chunk content
+                            if hasattr(chunk, "content") and chunk.content:
+                                if isinstance(chunk.content, str):
+                                    content_text = chunk.content
+                                elif isinstance(chunk.content, list):
+                                    for block in chunk.content:
+                                        if isinstance(block, str):
+                                            content_text += block
+                                        elif isinstance(block, dict) and block.get("type") == "text":
+                                            content_text += block.get("text", "")
+
+                            if content_text:
+                                yield f"data: {json.dumps({'type': 'content', 'delta': content_text})}\n\n"
+
+                # 3. After streaming is complete, fetch the final state to extract draft_itinerary
+                final_state_snapshot = await travel_agent_app.aget_state(config)
+                draft = final_state_snapshot.values.get("draft_itinerary", None)
+                
+                print(f"[FastAPI METADATA] Sending draft_itinerary length: {len(draft) if draft else 0}")
+                yield f"data: {json.dumps({'type': 'metadata', 'draft_itinerary': draft})}\n\n"
+                yield "data: [DONE]\n\n"
+
+            except Exception as e:
+                print(f"❌ [FastAPI Stream Error]: {str(e)}")
+                yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+
+        # 4. Return StreamingResponse
+        return StreamingResponse(event_generator(), media_type="text/event-stream")
 
     except Exception as e:
-        print(f"❌ [FastAPI Error]: {str(e)}")
+        print(f"❌ [FastAPI Initialization Error]: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
-    uvicorn.run("main:app", host="0.0.0.0", port=port)
+    host = "0.0.0.0" if "PORT" in os.environ else "127.0.0.1"
+    
+    uvicorn.run("main:app", host=host, port=port)
 
 # uv run python -m backend.main
+# uv run python .\backend\main.py
 # http://127.0.0.1:8000/docs
 
 # Test Cases:

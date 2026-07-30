@@ -31,6 +31,7 @@ def update_travel_state_tool(
     - accommodation_preferences (List[str]): e.g., ['Hotel', 'Airbnb', 'Resort'].
     - transportation_preferences (List[str]): e.g., ['Public Transit', 'Rental Car'].
     - activities_preferences (List[str]): e.g., ['Museums', 'Hiking', 'Shopping'].
+    - weather_forecast (str): Weather forecast for the trip.
     """
 
     # Extract the keys that were updated for logging purposes

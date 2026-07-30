@@ -10,6 +10,7 @@ def keep_last_non_null(existing_val: Optional[str], new_val: Optional[str]) -> O
 class TravelAgentState(TypedDict):
     # 1. Conversation History (Memory)
     messages: Annotated[List[BaseMessage], add_messages]
+    retrieved_context: Annotated[Optional[str], keep_last_non_null]
     
     # 2. User Profile / Demographics
     user_age: Optional[int]
@@ -37,6 +38,7 @@ class TravelAgentState(TypedDict):
     
     # 5. Draft Itinerary
     draft_itinerary: Annotated[Optional[str], keep_last_non_null]
+    weather_forecast: Optional[str]
     
     # 6. Human in the Loop (HITL) & Workflow Control
     # current_step: Optional[str]             
@@ -102,6 +104,7 @@ def build_agent_context(state: TravelAgentState) -> str:
 
     # 4. Draft Itinerary
     draft_str = state.get("draft_itinerary") or "None"
+    weather_str = state.get("weather_forecast") or "Not fetched yet"
 
     # Return a structured context string
     return (
@@ -109,6 +112,7 @@ def build_agent_context(state: TravelAgentState) -> str:
         f"USER PROFILE: {profile_str}\n"
         f"TRIP DETAILS:\n  • {details_str}\n"
         f"PREFERENCES:\n  • {prefs_str}\n"
+        f"WEATHER FORECAST: {weather_str}\n"
         f"DRAFT ITINERARY IN STATE:\n{draft_str}\n"
         "=================================================================\n"
     )
