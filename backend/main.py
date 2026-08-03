@@ -105,6 +105,27 @@ async def chat_endpoint(request: QueryRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/history/{thread_id}")
+async def get_history(thread_id: str):
+    config = {"configurable": {"thread_id": thread_id}}
+    state_snapshot = await travel_agent_app.aget_state(config)
+    
+    # Extract messages and draft_itinerary from the state snapshot
+    messages = state_snapshot.values.get("messages", [])
+    draft_itinerary = state_snapshot.values.get("draft_itinerary", None)
+    
+    # Format messages for frontend consumption
+    formatted_messages = []
+    for msg in messages:
+        role = "user" if msg.type == "human" else "assistant"
+        formatted_messages.append({"role": role, "content": msg.content})
+        
+    return {
+        "messages": formatted_messages,
+        "draft_itinerary": draft_itinerary
+    }
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     host = "0.0.0.0" if "PORT" in os.environ else "127.0.0.1"

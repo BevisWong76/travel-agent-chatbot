@@ -29,6 +29,14 @@ if "is_drafting" not in st.session_state:
 if "thread_id" not in st.session_state:
     st.session_state.thread_id = str(uuid.uuid4())
 
+# Fetch Historical Messages & Draft Itinerary from Backend
+if "messages" not in st.session_state or not st.session_state.messages:
+    res = requests.get(f"{BACKEND_URL}/history/{st.session_state.thread_id}")
+    if res.status_code == 200:
+        data = res.json()
+        st.session_state.messages = data.get("messages", [])
+        st.session_state.draft_itinerary = data.get("draft_itinerary", None)
+
 # Layout: 1:1 Split
 col1, col2 = st.columns([1, 1])
 
