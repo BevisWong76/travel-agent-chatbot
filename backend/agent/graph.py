@@ -8,7 +8,8 @@ from langchain_core.runnables import RunnableConfig
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.graph import StateGraph, START, END
 from langgraph.prebuilt import ToolNode
-from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+from psycopg_pool import AsyncConnectionPool
 
 from tools import ACTION_TOOLS
 from agent.state import TravelAgentState, build_agent_context
@@ -16,6 +17,7 @@ from services.rag_engine import query_rag
 from services.crawler import search_and_crawl
 
 load_dotenv()
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user:pass@localhost:5432/dbname")
 
 # =====================================================================
 # 1. LLM & Tools Setup
@@ -64,10 +66,25 @@ I've checked the forecast for Hong Kong—temperatures will be around 19°C-24°
 # 2. Nodes Definition
 # =====================================================================
 
+# Helper Function to Extract Text Content from LLM Responses
+def extract_text_content(content) -> str:
+    if isinstance(content, str):
+        return content
+    elif isinstance(content, list):
+        text_parts = []
+        for part in content:
+            if isinstance(part, str):
+                text_parts.append(part)
+            elif isinstance(part, dict) and "text" in part:
+                text_parts.append(part["text"])
+        return "".join(text_parts)
+    return str(content) if content else ""
+
 # Node 1: Code-level CRAG (Process Knowledge Base / Crawler)
 async def retrieve_or_crawl_node(state: TravelAgentState):
     messages = state.get("messages", [])
-    user_query = messages[-1].content if messages else ""
+    raw_content = messages[-1].content if messages else ""
+    user_query = extract_text_content(raw_content)
     
     # 1. Check Pinecone for relevant context
     rag_context = await query_rag(user_query)
@@ -102,6 +119,7 @@ async def call_agent_node(state: TravelAgentState, config: RunnableConfig):
         max_tokens=5000,
         strategy="last",
         token_counter=len,
+        allow_partial=True,
         start_on="human",
         include_system=False,
     )
@@ -111,13 +129,7 @@ async def call_agent_node(state: TravelAgentState, config: RunnableConfig):
     response = await llm_with_tools.ainvoke(prompt_messages, config)
 
     # Extract the content text from the response, handling both string and list formats
-    content_text = ""
-    if isinstance(response.content, str):
-        content_text = response.content
-    elif isinstance(response.content, list):
-        content_text = "".join(
-            [chunk.get("text", "") for chunk in response.content if isinstance(chunk, dict)]
-        )
+    content_text = extract_text_content(response.content)
 
     # Extract Itinerary by locating XML Tag
     new_itinerary = None
@@ -172,10 +184,19 @@ builder.add_conditional_edges(
 builder.add_edge("tools", "agent")                 # 4. Tool results are passed back to the Agent for final response generation
 
 # =====================================================================
-# 5. Checkpointer (MemorySaver / Postgres) & Compile Graph
+# 5. Checkpointer & Compile Graph
 # =====================================================================
 
 # Checkpointer: In-memory for development; 
-# can switch to AsyncPostgresSaver or RedisSaver for production
-checkpointer = MemorySaver()
-travel_agent_app = builder.compile(checkpointer=checkpointer)
+# checkpointer = MemorySaver()
+# travel_agent_app = builder.compile(checkpointer=checkpointer)
+
+# Checkpointer: PostgreSQL for production
+connection_kwargs = {"autocommit": True, "prepare_threshold": 0}
+pool = AsyncConnectionPool(conninfo=DATABASE_URL, kwargs=connection_kwargs, open=False)
+
+async def init_app():
+    await pool.open()
+    checkpointer = AsyncPostgresSaver(pool)
+    await checkpointer.setup()
+    return builder.compile(checkpointer=checkpointer)

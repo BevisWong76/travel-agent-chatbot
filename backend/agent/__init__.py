@@ -1,7 +1,8 @@
-from .graph import travel_agent_app
+from .graph import init_app, extract_text_content
 from .state import TravelAgentState
 
 __all__ = [
-    "travel_agent_app",
+    "init_app",
     "TravelAgentState",
+    "extract_text_content"
 ]

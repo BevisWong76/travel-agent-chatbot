@@ -1,17 +1,25 @@
 import os
+import re
 import json
 import uvicorn
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 from fastapi.responses import StreamingResponse
 
-from agent import travel_agent_app, TravelAgentState
+from agent import init_app, TravelAgentState, extract_text_content
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    app.state.agent = await init_app()
+    yield
 
 app = FastAPI(
     title="AI Travel Planner API",
     description="FastAPI Backend powered by LangGraph Search-driven RAG Agent",
-    version="2.0.0"
+    version="2.0.0",
+    lifespan=lifespan
 )
 
 # Request & Response Models
@@ -51,7 +59,7 @@ async def chat_endpoint(request: QueryRequest):
             try:
                 print("[FastAPI] Starting SSE event stream...")
 
-                async for event in travel_agent_app.astream_events(initial_state, version="v2", config=config):
+                async for event in app.state.agent.astream_events(initial_state, version="v2", config=config):
                     kind = event["event"]
                     node_name = event.get("metadata", {}).get("langgraph_node", "")
                     
@@ -86,7 +94,7 @@ async def chat_endpoint(request: QueryRequest):
                                 yield f"data: {json.dumps({'type': 'content', 'delta': content_text})}\n\n"
 
                 # 3. After streaming is complete, fetch the final state to extract draft_itinerary
-                final_state_snapshot = await travel_agent_app.aget_state(config)
+                final_state_snapshot = await app.state.agent.aget_state(config)
                 draft = final_state_snapshot.values.get("draft_itinerary", None)
                 
                 print(f"[FastAPI METADATA] Sending draft_itinerary length: {len(draft) if draft else 0}")
@@ -105,26 +113,61 @@ async def chat_endpoint(request: QueryRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def clean_itinerary_tags(content: str) -> str:
+    """
+    Cleans <itinerary>...</itinerary> tags from the assistant's content.
+    """
+    if not content:
+        return ""
+    
+    # 1. Use regex to remove <itinerary>...</itinerary> blocks
+    content = re.sub(r'<itinerary>.*?</itinerary>', '', content, flags=re.DOTALL)
+    
+    # 2. If there's still a <itinerary> tag without a closing tag, truncate content before it
+    if "<itinerary>" in content:
+        content = content.split("<itinerary>")[0]
+        
+    return content.strip()
+
+
 @app.get("/history/{thread_id}")
 async def get_history(thread_id: str):
     config = {"configurable": {"thread_id": thread_id}}
-    state_snapshot = await travel_agent_app.aget_state(config)
+    state_snapshot = await app.state.agent.aget_state(config)
     
-    # Extract messages and draft_itinerary from the state snapshot
-    messages = state_snapshot.values.get("messages", [])
+    if not state_snapshot or not state_snapshot.values:
+        return {"messages": [], "draft_itinerary": None}
+
+    # Extract messages and draft_itinerary from state_snapshot
+    raw_messages = state_snapshot.values.get("messages", [])
     draft_itinerary = state_snapshot.values.get("draft_itinerary", None)
     
-    # Format messages for frontend consumption
     formatted_messages = []
-    for msg in messages:
-        role = "user" if msg.type == "human" else "assistant"
-        formatted_messages.append({"role": role, "content": msg.content})
+    for msg in raw_messages:
+        # 1. Determine role based on message type
+        if msg.type in ["human", "user"]:
+            role = "user"
+        elif msg.type in ["ai", "assistant"]:
+            role = "assistant"
+        else:
+            continue
         
+        # 2. Extract content and clean <itinerary> tags for assistant messages
+        if hasattr(msg, "content") and msg.content:
+            content = extract_text_content(msg.content)
+            
+            # Clean <itinerary> tags for assistant messages
+            if role == "assistant":
+                content = clean_itinerary_tags(content)
+            
+            # Append to formatted_messages if content is not empty
+            if content:
+                formatted_messages.append({"role": role, "content": content})
+            
     return {
         "messages": formatted_messages,
         "draft_itinerary": draft_itinerary
     }
-
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))

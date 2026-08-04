@@ -1,33 +1,35 @@
 # Crawler & Search
-tavily-python
+tavily-python==0.8.1
 
 # LLMs, RAG & LlamaIndex
-llama-index-core
-llama-index-llms-google-genai
-llama-index-embeddings-google-genai
-# llama-index-embeddings-huggingface
-llama-index-vector-stores-pinecone
+llama-index-core==0.14.24
+llama-index-llms-google-genai==0.11.1
+llama-index-embeddings-google-genai==0.6.0
+llama-index-vector-stores-pinecone==0.9.0
 
 # Cloud Vector Databases
-pinecone
+pinecone==9.1.0
 
 # LangChain & LangGraph (Agent Architecture)
-langchain-core
-langchain-google-genai
-langgraph
+langchain-core==1.6.2
+langchain-google-genai==4.4.0
+langgraph==1.2.11
+langgraph-checkpoint-postgres==3.1.2
+
+# Database Drivers
+psycopg[binary]==3.3.5
+psycopg-pool==3.3.1
 
 # Agent External API Tools
-googlemaps
-httpx
-async_lru
+googlemaps==4.10.0
+httpx==0.28.1
+async_lru==2.3.0
 
 # Web Framework & Utilities
-fastapi
-uvicorn
-python-dotenv
-nest-asyncio
-pydantic
-
-
+fastapi==0.141.1
+uvicorn==0.52.4
+python-dotenv==1.2.3
+nest-asyncio==1.6.0
+pydantic==2.13.5
 
 # uv pip install -r .\backend\requirements.txt
