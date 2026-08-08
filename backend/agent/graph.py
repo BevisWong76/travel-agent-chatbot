@@ -24,14 +24,14 @@ DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user:pass@localhost:5432/
 # =====================================================================
 primary_llm = ChatGoogleGenerativeAI(
     model="gemini-3.5-flash-lite",
-    temperature=0.3,
     api_key=os.getenv("GEMINI_API_KEY")
 )
 fallback_llm = ChatGoogleGenerativeAI(
     model="gemini-3.1-flash-lite",
-    temperature=0.3,
     api_key=os.getenv("GEMINI_API_KEY")
 )
+# for lite models, sampling parameters are not supported, so we don't set temperature or top_p here
+
 llm = primary_llm.with_fallbacks([fallback_llm])
 
 # Bind the LLM with all available tools for parallel execution
@@ -104,6 +104,7 @@ async def retrieve_or_crawl_node(state: TravelAgentState):
 
 # Node 2: Agent Reasoning Node (Process Tools Calls and Generate Final Response)
 async def call_agent_node(state: TravelAgentState, config: RunnableConfig):
+    print("[Agent] Building context for LLM...")
     context_str = build_agent_context(state)
     retrieved_info = state.get("retrieved_context", "No retrieved docs.")
     
@@ -126,12 +127,14 @@ async def call_agent_node(state: TravelAgentState, config: RunnableConfig):
     prompt_messages = [full_system_prompt] + trimmed_messages
     
     # Invoke the LLM with tools
+    print("[Agent] Invoking LLM with tools...")
     response = await llm_with_tools.ainvoke(prompt_messages, config)
 
     # Extract the content text from the response, handling both string and list formats
     content_text = extract_text_content(response.content)
 
     # Extract Itinerary by locating XML Tag
+    print("[Agent] Extracting itinerary from LLM response...")
     new_itinerary = None
     if content_text:
         match = re.search(r"<itinerary>(.*?)</itinerary>", content_text, re.DOTALL)
@@ -147,6 +150,7 @@ async def call_agent_node(state: TravelAgentState, config: RunnableConfig):
 # 3. Conditional Routing Function
 # =====================================================================
 def should_continue(state: TravelAgentState) -> Literal["tools", "__end__"]:
+    print("[Routing] Evaluating whether to continue to tools or end the conversation...")
     messages = state.get("messages", [])
     if not messages:
         return END
@@ -154,8 +158,10 @@ def should_continue(state: TravelAgentState) -> Literal["tools", "__end__"]:
     last_message = messages[-1]
     # if the last message contains tool calls, route to "tools" node; otherwise, end the conversation
     if hasattr(last_message, "tool_calls") and last_message.tool_calls:
+        print("[Routing] Tool calls detected in the last message. Routing to 'tools' node.")
         return "tools"
     
+    print("[Routing] No tool calls found. Ending conversation.")
     return END
 
 # =====================================================================

@@ -31,7 +31,7 @@ def parse_departure_time(departure_time_str: str):
         dt = datetime.fromisoformat(departure_time_str)
         return int(dt.timestamp())
     except Exception as e:
-        print(f"[DEBUG] Failed to parse departure_time '{departure_time_str}': {e}. Defaulting to 'now'.")
+        print(f"[Maps Tools - DEBUG] Failed to parse departure_time '{departure_time_str}': {e}. Defaulting to 'now'.")
         return "now"
 
 def format_directions_response(directions: list, mode: str) -> str:
@@ -81,6 +81,7 @@ def format_directions_response(directions: list, mode: str) -> str:
             )
             summary.append(f"  {idx}. [{travel_mode}] {clean_instructions} ({step['distance']['text']})")
 
+    print(f"[Maps Tools] Directions Summary: {len(summary)} steps formatted.")
     return "\n".join(summary)
 
 @tool
@@ -101,6 +102,7 @@ async def maps_tool(origin: str, destination: str, mode: str = "transit", depart
 
     try:
         # Call Google Maps Directions API
+        print(f"[Maps Tools] Fetching directions from '{origin}' to '{destination}' via {mode} at '{departure_time}'")
         directions = gmaps.directions(
             origin=origin,
             destination=destination,
@@ -117,6 +119,7 @@ async def maps_tool(origin: str, destination: str, mode: str = "transit", depart
                 f"Note: Transit options may be closed at this hour or schedule data is unavailable for this location. "
                 f"Consider querying with a different mode (e.g., 'driving' or 'walking') or adjusting the departure time."
             )
+        print(f"[Maps Tools] Directions fetched successfully. Processing {len(directions[0]['legs'][0]['steps'])} steps...")
 
         return format_directions_response(directions, mode)
 
@@ -262,7 +265,10 @@ async def weather_tool(location: str, start_date: Optional[str] = None, end_date
         end_date: Optional end date in 'YYYY-MM-DD' format (e.g., '2026-10-18').
     """
     try:
-        return await _fetch_weather_data(location, start_date, end_date)
+        print(f"[Weather Tools] Fetching weather for {location} from {start_date} to {end_date}")
+        res = await _fetch_weather_data(location, start_date, end_date)
+        print(f"[Weather Tools] Weather fetch result: {res[:100]}...")
+        return res
     except Exception as e:
         return f"Error fetching weather data for {location}: {str(e)}"
 

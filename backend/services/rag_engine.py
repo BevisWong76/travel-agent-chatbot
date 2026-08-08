@@ -69,7 +69,7 @@ def ingest_documents(documents: List[Document]):
         if "valid_year" not in doc.metadata:
             doc.metadata["valid_year"] = current_year
         
-        print(f"Scraped Doc URL: {doc.metadata.get('source_url')} | Length: {len(doc.text)} chars")
+        print(f"[RAG Engine] Scraped Doc URL: {doc.metadata.get('source_url')} | Length: {len(doc.text)} chars")
     
     print(f"[RAG Engine] Ingesting {len(documents)} documents into Pinecone...")
     VectorStoreIndex.from_documents(
@@ -99,6 +99,7 @@ async def query_rag(user_query: str, min_year: int = datetime.now().year) -> str
     )
     
     # 3. Retrieve relevant nodes from Pinecone
+    print(f"[RAG Engine] Querying Pinecone for relevant documents for: '{user_query}'...")
     nodes = await retriever.aretrieve(user_query)
     
     if not nodes:
@@ -109,6 +110,7 @@ async def query_rag(user_query: str, min_year: int = datetime.now().year) -> str
     for i, node in enumerate(nodes, 1):
         source = node.metadata.get("source_url", "Unknown")
         context_list.append(f"[Source {i}]: {source}\nContent: {node.get_content().strip()}")
+    print(f"[RAG Engine] Retrieved {len(nodes)} relevant documents from Pinecone.")
         
     return "\n\n---\n\n".join(context_list)
 

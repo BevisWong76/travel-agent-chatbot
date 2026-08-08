@@ -35,8 +35,9 @@ def update_travel_state_tool(
     """
 
     # Extract the keys that were updated for logging purposes
+    print(f"[Tool] Updating travel state with keys: {list(updates.keys())}")
     updated_keys = list(updates.keys()) if isinstance(updates, dict) else []
-    msg = f"Successfully updated state fields: {', '.join(updated_keys)}"
+    msg = "Successfully updated state fields: " + ", ".join(updated_keys)
 
     return Command(
         update={

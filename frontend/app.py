@@ -120,9 +120,8 @@ if "messages" not in st.session_state:
 
     # Fetch history from backend
     try:
-        res = requests.get(
-            f"{BACKEND_URL}/history/{st.session_state.thread_id}", timeout=5
-        )
+        with st.spinner("Waking up backend server, please wait a moment..."):
+            res = requests.get(f"{BACKEND_URL}/history/{st.session_state.thread_id}", timeout=60)
         if res.status_code == 200:
             data = res.json()
             raw_messages = data.get("messages", [])
@@ -264,9 +263,7 @@ with col1:
                         status_placeholder.empty()
 
                         # Extract dialogue before and after <itinerary> tags
-                        dialogue_before = accumulated_text.split("<itinerary>")[
-                            0
-                        ].strip()
+                        dialogue_before = accumulated_text.split("<itinerary>")[0].strip()
                         dialogue_after = ""
                         if "</itinerary>" in accumulated_text:
                             dialogue_after = accumulated_text.split("</itinerary>")[

@@ -105,7 +105,7 @@ def build_agent_context(state: TravelAgentState) -> str:
     # 4. Draft Itinerary
     draft_str = state.get("draft_itinerary") or "None"
     weather_str = state.get("weather_forecast") or "Not fetched yet"
-
+          
     # Return a structured context string
     return (
         "\n================ [CURRENT USER STATE & CONTEXT] ================\n"

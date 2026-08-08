@@ -7,6 +7,8 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 from fastapi.responses import StreamingResponse
+import asyncio
+import psycopg
 
 from agent import init_app, TravelAgentState, extract_text_content
 
@@ -132,8 +134,24 @@ def clean_itinerary_tags(content: str) -> str:
 
 @app.get("/history/{thread_id}")
 async def get_history(thread_id: str):
+    print(f"[FastAPI] Fetching conversation history for thread_id: '{thread_id}'")
     config = {"configurable": {"thread_id": thread_id}}
-    state_snapshot = await app.state.agent.aget_state(config)
+
+    # Attempt to retrieve the state snapshot with retries in case of transient database errors
+    state_snapshot = None
+    max_retries = 10
+    retry_interval = 5
+
+    for attempt in range(max_retries):
+        try:
+            state_snapshot = await app.state.agent.aget_state(config)
+            break
+        except psycopg.OperationalError as e:
+            print(f"[Database Error] Attempt {attempt + 1}/{max_retries}: {str(e)}, retrying in {retry_interval} seconds...")
+            if attempt == max_retries - 1:
+                raise e
+            await asyncio.sleep(retry_interval)
+            continue
     
     if not state_snapshot or not state_snapshot.values:
         return {"messages": [], "draft_itinerary": None}
