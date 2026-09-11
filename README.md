@@ -43,7 +43,7 @@ The system operates on an asynchronous, event-driven architecture designed for l
 1. **Client Layer:** The Streamlit frontend captures user inputs and establishes a Server-Sent Events (SSE) connection with the backend. It actively parses the incoming stream to separate conversational text from structural `<itinerary>` XML tags.
 2. **API Gateway:** A FastAPI server orchestrates requests, managing database lifecycles via an `@asynccontextmanager` and gracefully handling serverless cold starts through custom retry loops on the `/history/{thread_id}` endpoint.
 3. **Graph Orchestrator:** LangGraph drives the core decision engine. It injects a structured `TravelAgentState` (demographics, preferences, constraints) and a trimmed context window into the LLM. 
-4. **Information Retrieval:** A conditional `retrieve_or_crawl_node` queries a Pinecone vector database using `gemini-embedding-2` and strict chronological filters (`min_year`, `similarity_cutoff=0.7`). If sufficient data is not found, it seamlessly delegates to an asynchronous Tavily web crawler.
+4. **Information Retrieval:** A conditional `retrieve_or_crawl_node` queries a Pinecone vector database using `gemini-embedding-2` and strict chronological filters (`min_year`, `similarity_cutoff=0.7`). If insufficient data is found, it seamlessly delegates to an asynchronous Tavily web crawler.
 5. **Tool Execution:** The LLM leverages parallel tool calling to hit external APIs (Maps, Weather) using a shared HTTPX client with connection pooling to maximize throughput and prevent socket exhaustion.
 6. **State Persistence:** Every node transition and state mutation is snapshotted and persisted to a Neon PostgreSQL checkpointer, ensuring seamless session recovery.
 
@@ -52,7 +52,7 @@ The system operates on an asynchronous, event-driven architecture designed for l
 ## Key Features
 
 * **Advanced Session Routing & Memory:** Persistent, shareable planning sessions using a multi-tiered thread ID resolution strategy (URL Parameters → LocalStorage → New Session), allowing users to refresh or share links without losing context.
-* **Intelligent Time-Aware Weather Routing:** A bespoke weather tool automatically caches geocoding coordinates and routes API calls based on the trip date: forecasts for the next 14 days, exact historical data for past dates, and "same period last year" historical averages for distant future trips.
+* **Intelligent Time-Aware Weather Routing:** A bespoke weather tool automatically caches geocoding coordinates and routes API calls based on the trip date: forecasts for the next 14 days, exact historical data for past dates, and **'same period last year'** historical averages for distant future trips.
 * **Hybrid RAG & Async Web Crawling:** Merges LlamaIndex vector search with dynamic web crawling. Ingested documents are strictly filtered by year and relevance, while raw crawler outputs are instantly sanitized (stripping empty lines and external links) to conserve token context.
 * **Real-Time Dual-Pane UI:** Employs an asynchronous event generator to stream LLM tokens to the chat interface while simultaneously updating a dedicated itinerary dashboard at the moment the agent encapsulates draft updates in `<itinerary>` tags.
 * **Resilient Serverless Design:** Built to withstand free-tier infrastructure limitations via automated FastAPI database retry loops and resilient Streamlit polling UX during backend wake-ups.
@@ -92,6 +92,12 @@ LANGCHAIN_ENDPOINT="https://api.smith.langchain.com"
 LANGCHAIN_API_KEY=your_langsmith_api_key
 LANGCHAIN_PROJECT="travel-agent-chatbot"
 ```
+
+> **Configuration Notes:**
+> * **Neon DB Connection String:** When setting `DATABASE_URL`, navigate to your [Neon Console](https://console.neon.tech/), select your project, click **Connect**, and copy the provided connection string directly into your `.env` file.
+> * **Local Development URLs:** For local testing, leave `BACKEND_URL` and `FRONTEND_URL` commented out or omitted in your `.env` file to allow the app to default to `http://localhost:8000` and `http://localhost:8501`. Only specify custom URLs in a `.env` file if you are explicitly testing env-file-based deployments on a cloud platform.
+> * **Cloud Deployment (Production / Staging):** When deploying to cloud platforms (e.g., Render or Streamlit Community Cloud), do not use a `.env` file. Instead, set all environment variables directly in the platform's Environment Variables / Secrets setting dashboard.
+> * **Streamlit Cloud Base URL:** When setting `FRONTEND_URL` in production, use the standard base URL from your Streamlit Community Cloud app settings (e.g., `https://your-app.streamlit.app`). Do not append dynamic query parameters like `?thread_id=...` generated in the browser address bar, as those are used exclusively for session routing.
 
 ---
 
@@ -151,3 +157,4 @@ Launch the backend server and Streamlit frontend in separate terminal instances:
   ```
   *Access the user interface locally at `http://localhost:8501`.*
 
+> * **Gemini API Regional Constraints:** Because this project uses the Gemini API, ensure your network or host environment is located in (or connected via VPN to) a [supported region for the Gemini API](https://ai.google.dev/gemini-api/docs/available-regions).

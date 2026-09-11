@@ -12,16 +12,27 @@ from dotenv import load_dotenv
 # =====================================================================
 load_dotenv()
 
-if "BACKEND_URL" in st.secrets:
-    BACKEND_URL = st.secrets["BACKEND_URL"]
-else:
-    BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000")
-BACKEND_URL = BACKEND_URL.rstrip("/")
+def get_config_variable(key: str, default: str) -> str:
+    """
+    Priority order for fetching configuration variables:
+    1. Local .env (os.getenv)
+    2. Streamlit Cloud Secrets (st.secrets)
+    3. Default Fallback
+    """
+    val = os.getenv(key)
+    if val:
+        return val
 
-if "FRONTEND_URL" in st.secrets:
-    FRONTEND_URL = st.secrets["FRONTEND_URL"]
-else:
-    FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:8501")
+    try:
+        if key in st.secrets:
+            return st.secrets[key]
+    except Exception:
+        pass
+
+    return default
+
+BACKEND_URL = get_config_variable("BACKEND_URL", "http://localhost:8000").rstrip("/")
+FRONTEND_URL = get_config_variable("FRONTEND_URL", "http://localhost:8501")
 
 # =====================================================================
 # 2. Streamlit Page Configuration and Helper Functions
@@ -82,8 +93,8 @@ if "is_drafting" not in st.session_state:
 # =====================================================================
 top_col1, top_col2, top_col3 = st.columns([3, 1, 1])
 
+# Display the current itinerary link for sharing
 with top_col1:
-    # Display the current itinerary link for sharing
     current_url = f"{FRONTEND_URL}/?thread_id={st.session_state.thread_id}"
     st.text_input(
         "🔗 Your Itinerary Link:",
@@ -92,10 +103,12 @@ with top_col1:
         label_visibility="collapsed",
     )
 
+# Copy Link button
 with top_col2:
     if st.button("📋 Copy Link", use_container_width=True):
         show_copy_dialog(current_url)
 
+# New Plan button
 with top_col3:
     if st.button("➕ New Plan", use_container_width=True):
         new_id = str(uuid.uuid4())
@@ -162,7 +175,6 @@ with col1:
 
     # 1. Scrollable Chat Container (Fixed Height)
     chat_container = st.container(height=550)
-
     with chat_container:
         for message in st.session_state.messages:
             with st.chat_message(message["role"]):
@@ -176,7 +188,7 @@ with col1:
             with st.chat_message("user"):
                 st.markdown(prompt)
 
-        # Prepare assistant response streaming
+        # 3. Prepare assistant response streaming
         with chat_container:
             with st.chat_message("assistant"):
                 message_placeholder = st.empty()
@@ -199,7 +211,9 @@ with col1:
                     )
 
                     if res.status_code == 200:
-                        # 1. Stream the response line by line
+                        stream_error = None 
+
+                        # 4. Stream the response line by line
                         for line in res.iter_lines():
                             if line:
                                 decoded_line = line.decode("utf-8")
@@ -212,14 +226,22 @@ with col1:
                                         event_data = json.loads(data_str)
                                         event_type = event_data.get("type")
 
-                                        if event_type == "status":
+                                        # Handle Error Event
+                                        if event_type == "error":
+                                            stream_error = event_data.get(
+                                                "message", "An unexpected streaming error occurred."
+                                            )
+                                            break
+
+                                        # Handle Status Event
+                                        elif event_type == "status":
                                             status_msg = event_data.get(
                                                 "message", "Model is processing..."
                                             )
                                             status_placeholder.info(f"⚙️ {status_msg}")
 
                                         # Process Streaming Token
-                                        elif event_data.get("type") == "content":
+                                        elif event_type == "content":
                                             delta = event_data.get("delta", "")
                                             accumulated_text += delta
 
@@ -250,7 +272,7 @@ with col1:
                                                 )
 
                                         # Final processing of Metadata
-                                        elif event_data.get("type") == "metadata":
+                                        elif event_type == "metadata":
                                             if event_data.get("draft_itinerary"):
                                                 draft_itinerary_data = event_data.get(
                                                     "draft_itinerary"
@@ -259,35 +281,42 @@ with col1:
                                     except json.JSONDecodeError:
                                         continue
 
-                        # 2. Clean up and extract dialogue after streaming completes
+                        # 5. Clean up status indicator
                         status_placeholder.empty()
 
-                        # Extract dialogue before and after <itinerary> tags
-                        dialogue_before = accumulated_text.split("<itinerary>")[0].strip()
-                        dialogue_after = ""
-                        if "</itinerary>" in accumulated_text:
-                            dialogue_after = accumulated_text.split("</itinerary>")[
-                                -1
-                            ].strip()
+                        # 6. Handle final display and error reporting
+                        if stream_error:
+                            message_placeholder.empty()
+                            st.error(f"⚠️ API Stream Error: {stream_error}")
+                        else:
+                            # Extract dialogue before and after <itinerary> tags for final display
+                            dialogue_before = accumulated_text.split("<itinerary>")[0].strip()
+                            dialogue_after = ""
+                            if "</itinerary>" in accumulated_text:
+                                dialogue_after = accumulated_text.split("</itinerary>")[
+                                    -1
+                                ].strip()
 
-                        final_chat_text = (
-                            f"{dialogue_before}\n\n{dialogue_after}".strip()
-                        )
+                            final_chat_text = (
+                                f"{dialogue_before}\n\n{dialogue_after}".strip()
+                            )
 
-                        # Provide default prompt if no conversational text was generated
-                        if not final_chat_text:
-                            final_chat_text = "I've updated your itinerary based on your details! Check out the panel on the right. ➡️"
+                            # If no text content is generated, provide a default message
+                            if not final_chat_text and draft_itinerary_data:    # If itinerary exists but no text content, provide default message
+                                final_chat_text = "I've updated your itinerary based on your details! Check out the panel on the right. ➡️"
+                            elif not final_chat_text:   # If no text content and no itinerary, provide a fallback message
+                                final_chat_text = "No text content generated."
 
-                        # Finalize rendering and update message history
-                        message_placeholder.markdown(final_chat_text)
-                        st.session_state.messages.append(
-                            {"role": "assistant", "content": final_chat_text}
-                        )
+                            # Finalize rendering and update message history
+                            message_placeholder.markdown(final_chat_text)
+                            st.session_state.messages.append(
+                                {"role": "assistant", "content": final_chat_text}
+                            )
 
-                        # 3. Save draft itinerary data and trigger rerun to refresh right panel
-                        if draft_itinerary_data:
-                            st.session_state.draft_itinerary = draft_itinerary_data
-                            st.rerun()
+                            # Save draft itinerary data and trigger rerun to refresh right panel
+                            if draft_itinerary_data:
+                                st.session_state.draft_itinerary = draft_itinerary_data
+                                st.rerun()
 
                     else:
                         st.error(f"Error from API ({res.status_code}): {res.text}")
